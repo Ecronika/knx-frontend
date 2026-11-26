@@ -372,24 +372,20 @@ export class KNXEntitiesSuggestions extends LitElement {
     if (!this._projectAreas()) return nothing;
     return html`
       <div class="area-options">
-        <label class="assign-areas">
-          <ha-switch
-            .checked=${this._assignAreas}
-            .disabled=${this._creating}
-            @change=${this._assignAreasChanged}
-          ></ha-switch>
-          <span>${this.knx.localize("suggestions_assign_areas")}</span>
-        </label>
+        <ha-switch
+          .checked=${this._assignAreas}
+          .disabled=${this._creating}
+          @change=${this._assignAreasChanged}
+          >${this.knx.localize("suggestions_assign_areas")}</ha-switch
+        >
         ${
           this._assignAreas
-            ? html`<label class="assign-areas">
-                <ha-switch
-                  .checked=${this._stripSortNumbers}
-                  .disabled=${this._creating}
-                  @change=${this._stripSortNumbersChanged}
-                ></ha-switch>
-                <span>${this.knx.localize("suggestions_strip_sort_numbers")}</span>
-              </label>`
+            ? html`<ha-switch
+                .checked=${this._stripSortNumbers}
+                .disabled=${this._creating}
+                @change=${this._stripSortNumbersChanged}
+                >${this.knx.localize("suggestions_strip_sort_numbers")}</ha-switch
+              >`
             : nothing
         }
       </div>
@@ -576,8 +572,8 @@ export class KNXEntitiesSuggestions extends LitElement {
     const projectAreas = this._assignAreas ? this._projectAreas() : undefined;
     if (!projectAreas) return undefined;
     const area = suggestionArea(suggestion, platform, projectAreas);
-    if (!area) return this.knx.localize("suggestions_area_none");
-    return this.knx.localize("suggestions_area", {
+    if (!area) return this.knx.localize("ui.panel.config.integrations.config_entry.no_area");
+    return this.knx.localize("ui.panel.config.integrations.config_entry.area", {
       area: area.floor ? `${area.name} (${area.floor.name})` : area.name,
     });
   }
@@ -1024,12 +1020,6 @@ export class KNXEntitiesSuggestions extends LitElement {
       align-items: flex-start;
       gap: var(--ha-space-2, 8px);
       margin-inline-end: auto;
-    }
-    .assign-areas {
-      display: flex;
-      align-items: center;
-      gap: var(--ha-space-2, 8px);
-      cursor: pointer;
     }
   `;
 }

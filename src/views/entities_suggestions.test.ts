@@ -213,7 +213,7 @@ describe("KNXEntitiesSuggestions", () => {
 
     it("leaves areas alone unless enabled", async () => {
       const { view, host, calls } = setup();
-      expect(host.querySelector(".assign-areas")).not.toBeNull();
+      expect(host.querySelector(".area-options")).not.toBeNull();
       await view["_createSelected"]();
       expect(calls("knx/create_entity")).toHaveLength(7);
       expect(calls("config/entity_registry/update")).toHaveLength(0);
