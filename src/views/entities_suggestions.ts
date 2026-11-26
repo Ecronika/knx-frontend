@@ -371,26 +371,28 @@ export class KNXEntitiesSuggestions extends LitElement {
   private _renderAssignAreasSwitch(): TemplateResult | typeof nothing {
     if (!this._projectAreas()) return nothing;
     return html`
-      <label class="assign-areas">
-        <ha-switch
-          .checked=${this._assignAreas}
-          .disabled=${this._creating}
-          @change=${this._assignAreasChanged}
-        ></ha-switch>
-        <span>${this.knx.localize("suggestions_assign_areas")}</span>
-      </label>
-      ${
-        this._assignAreas
-          ? html`<label class="assign-areas">
-              <ha-switch
-                .checked=${this._stripSortNumbers}
-                .disabled=${this._creating}
-                @change=${this._stripSortNumbersChanged}
-              ></ha-switch>
-              <span>${this.knx.localize("suggestions_strip_sort_numbers")}</span>
-            </label>`
-          : nothing
-      }
+      <div class="area-options">
+        <label class="assign-areas">
+          <ha-switch
+            .checked=${this._assignAreas}
+            .disabled=${this._creating}
+            @change=${this._assignAreasChanged}
+          ></ha-switch>
+          <span>${this.knx.localize("suggestions_assign_areas")}</span>
+        </label>
+        ${
+          this._assignAreas
+            ? html`<label class="assign-areas">
+                <ha-switch
+                  .checked=${this._stripSortNumbers}
+                  .disabled=${this._creating}
+                  @change=${this._stripSortNumbersChanged}
+                ></ha-switch>
+                <span>${this.knx.localize("suggestions_strip_sort_numbers")}</span>
+              </label>`
+            : nothing
+        }
+      </div>
     `;
   }
 
@@ -1014,6 +1016,14 @@ export class KNXEntitiesSuggestions extends LitElement {
       align-items: center;
       justify-content: flex-end;
       gap: var(--ha-space-4, 16px);
+    }
+    /* the options of the entities to create - stacked, apart from the button */
+    .area-options {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--ha-space-2, 8px);
+      margin-inline-end: auto;
     }
     .assign-areas {
       display: flex;

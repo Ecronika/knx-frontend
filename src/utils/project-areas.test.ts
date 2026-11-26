@@ -149,6 +149,20 @@ describe("getProjectAreas", () => {
     expect(areaBySpace.kitchen.name).toBe("05. Kitchen");
   });
 
+  it("numbers rooms of the same name on the same floor without a floor prefix", () => {
+    const floor = space("ug", {
+      type: "Floor",
+      name: "UG",
+      spaces: {
+        bath1: space("bath1", { name: "04. Bath" }),
+        bath2: space("bath2", { name: "07. Bath" }),
+      },
+    });
+    const areas = getProjectAreas({ locations: { ug: floor } }, { stripSortNumbers: true });
+    expect(areas.areaBySpace.bath1.name).toBe("Bath");
+    expect(areas.areaBySpace.bath2.name).toBe("Bath 2");
+  });
+
   it("gives devices in a room its area - not those in a distribution board", () => {
     expect(areaByDevice).toEqual({
       "1.1.1": areaBySpace.kitchen,

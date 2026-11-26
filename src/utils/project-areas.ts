@@ -107,32 +107,29 @@ export const getProjectAreas = (
 
 /**
  * Area names are unique in Home Assistant - rooms of the same name (eg. "Corridor")
- * would otherwise end up in the same area. Those on different floors are prefixed
- * with their floor, those still sharing a name get a number.
+ * would otherwise end up in the same area. If rooms sharing a name are on different
+ * floors, those on a floor are prefixed with it - a prefix telling nothing apart is
+ * left out. Rooms still sharing a name, eg. on the same floor, get a number.
  */
 const disambiguateAreaNames = (areas: ProjectArea[]) => {
-  const countNames = () => {
-    const counts = new Map<string, number>();
+  const byName = () => {
+    const groups = new Map<string, ProjectArea[]>();
     areas.forEach((area) => {
       const key = normalizeRegistryName(area.name);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+      groups.set(key, [...(groups.get(key) ?? []), area]);
     });
-    return counts;
+    return groups;
   };
-  const nameCounts = countNames();
-  areas.forEach((area) => {
-    if (area.floor && nameCounts.get(normalizeRegistryName(area.name))! > 1) {
-      area.name = `${area.floor.name} ${area.name}`;
-    }
+  byName().forEach((group) => {
+    if (new Set(group.map((area) => area.floor)).size < 2) return;
+    group.forEach((area) => {
+      if (area.floor) area.name = `${area.floor.name} ${area.name}`;
+    });
   });
-  const remainingCounts = countNames();
-  const seen = new Map<string, number>();
-  areas.forEach((area) => {
-    const key = normalizeRegistryName(area.name);
-    if (remainingCounts.get(key)! < 2) return;
-    const index = (seen.get(key) ?? 0) + 1;
-    seen.set(key, index);
-    if (index > 1) area.name = `${area.name} ${index}`;
+  byName().forEach((group) => {
+    group.forEach((area, index) => {
+      if (index > 0) area.name = `${area.name} ${index + 1}`;
+    });
   });
 };
 
