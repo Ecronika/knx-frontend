@@ -53,6 +53,7 @@ import {
   suggestionArea,
   type ProjectArea,
   type ProjectAreas,
+  type ProjectFloor,
 } from "../utils/project-areas";
 import { KNXLogger } from "../tools/knx-logger";
 import type { KNX } from "../types/knx";
@@ -115,7 +116,14 @@ export class KNXEntitiesSuggestions extends LitElement {
   // assign created entities to areas derived from the ETS building structure
   @state() private _assignAreas = false;
 
-  private _projectAreasCache?: { locations: KNXProject["locations"]; areas: ProjectAreas };
+  // remove sort numbers like "05. " from the names of floors and areas
+  @state() private _stripSortNumbers = false;
+
+  private _projectAreasCache?: {
+    project: KNXProject;
+    stripSortNumbers: boolean;
+    areas: ProjectAreas;
+  };
 
   @state() private _rowStates: Record<string, RowState> = {};
 
@@ -157,10 +165,18 @@ export class KNXEntitiesSuggestions extends LitElement {
 
   /** Floors and areas of the ETS building structure - undefined while there is none. */
   private _projectAreas(): ProjectAreas | undefined {
-    const locations = this._projectData?.locations;
-    if (!locations || !Object.keys(locations).length) return undefined;
-    if (this._projectAreasCache?.locations !== locations) {
-      this._projectAreasCache = { locations, areas: getProjectAreas(locations) };
+    const project = this._projectData;
+    if (!project?.locations || !Object.keys(project.locations).length) return undefined;
+    const stripSortNumbers = this._stripSortNumbers;
+    if (
+      this._projectAreasCache?.project !== project ||
+      this._projectAreasCache.stripSortNumbers !== stripSortNumbers
+    ) {
+      this._projectAreasCache = {
+        project,
+        stripSortNumbers,
+        areas: getProjectAreas(project, { stripSortNumbers }),
+      };
     }
     return this._projectAreasCache.areas;
   }
@@ -363,6 +379,18 @@ export class KNXEntitiesSuggestions extends LitElement {
         ></ha-switch>
         <span>${this.knx.localize("suggestions_assign_areas")}</span>
       </label>
+      ${
+        this._assignAreas
+          ? html`<label class="assign-areas">
+              <ha-switch
+                .checked=${this._stripSortNumbers}
+                .disabled=${this._creating}
+                @change=${this._stripSortNumbersChanged}
+              ></ha-switch>
+              <span>${this.knx.localize("suggestions_strip_sort_numbers")}</span>
+            </label>`
+          : nothing
+      }
     `;
   }
 
@@ -437,7 +465,7 @@ export class KNXEntitiesSuggestions extends LitElement {
         })
       : undefined;
     const templateEntityInfo = this._templateEntityInfo(suggestion);
-    const areaInfo = this._areaInfo(suggestion);
+    const areaInfo = this._areaInfo(suggestion, rowState.platform);
     return html`
       <div class="row">
         <ha-checkbox
@@ -542,10 +570,10 @@ export class KNXEntitiesSuggestions extends LitElement {
   }
 
   /** The area an entity created from this suggestion is assigned to. */
-  private _areaInfo(suggestion: EntitySuggestion): string | undefined {
+  private _areaInfo(suggestion: EntitySuggestion, platform: SupportedPlatform): string | undefined {
     const projectAreas = this._assignAreas ? this._projectAreas() : undefined;
     if (!projectAreas) return undefined;
-    const area = suggestionArea(suggestion, projectAreas);
+    const area = suggestionArea(suggestion, platform, projectAreas);
     if (!area) return this.knx.localize("suggestions_area_none");
     return this.knx.localize("suggestions_area", {
       area: area.floor ? `${area.name} (${area.floor.name})` : area.name,
@@ -605,6 +633,10 @@ export class KNXEntitiesSuggestions extends LitElement {
     this._assignAreas = (ev.target as HTMLInputElement).checked;
   };
 
+  private _stripSortNumbersChanged = (ev: Event) => {
+    this._stripSortNumbers = (ev.target as HTMLInputElement).checked;
+  };
+
   private _providerVisibilityChanged = (ev: Event) => {
     const providerId = (ev.currentTarget as HTMLElement).getAttribute("data-provider-id");
     if (!providerId) return;
@@ -659,6 +691,9 @@ export class KNXEntitiesSuggestions extends LitElement {
     const registryIds = { floors: new Map<string, string>(), areas: new Map<string, string>() };
     this._creating = true;
     try {
+      if (projectAreas) {
+        await this._ensureFloorsInOrder(suggestions, projectAreas, registryIds.floors);
+      }
       for (const suggestion of suggestions) {
         const rowState = this._rowState(suggestion);
         if (!rowState.selected || rowState.status === "created") continue;
@@ -691,7 +726,7 @@ export class KNXEntitiesSuggestions extends LitElement {
           }
           logger.debug("created entity", result.entity_id, "for", suggestion.id);
           this._updateRowState(suggestion, { status: "created", selected: false });
-          const area = projectAreas && suggestionArea(suggestion, projectAreas);
+          const area = projectAreas && suggestionArea(suggestion, rowState.platform, projectAreas);
           if (area && result.entity_id) {
             try {
               // eslint-disable-next-line no-await-in-loop
@@ -739,21 +774,58 @@ export class KNXEntitiesSuggestions extends LitElement {
       registryIds.areas.set(areaKey, knownAreaId);
       return knownAreaId;
     }
-    let floorId: string | null = null;
-    if (area.floor) {
-      const floorKey = normalizeRegistryName(area.floor.name);
-      floorId =
-        registryIds.floors.get(floorKey) ??
-        findRegistryIdByName(this.hass.floors, area.floor.name) ??
-        (await createFloorRegistryEntry(this.hass.callWS, { name: area.floor.name })).floor_id;
-      registryIds.floors.set(floorKey, floorId);
-    }
+    const floorId = area.floor
+      ? await this._ensureFloor(area.floor, registryIds.floors)
+      : undefined;
     const created = await createAreaRegistryEntry(this.hass, {
       name: area.name,
       ...(floorId ? { floor_id: floorId } : {}),
     });
     registryIds.areas.set(areaKey, created.area_id);
     return created.area_id;
+  }
+
+  /** The id of the floor of the given name - created if there is none of that name yet. */
+  private async _ensureFloor(floor: ProjectFloor, floorIds: Map<string, string>): Promise<string> {
+    const floorKey = normalizeRegistryName(floor.name);
+    const floorId =
+      floorIds.get(floorKey) ??
+      findRegistryIdByName(this.hass.floors, floor.name) ??
+      (await createFloorRegistryEntry(this.hass.callWS, { name: floor.name })).floor_id;
+    floorIds.set(floorKey, floorId);
+    return floorId;
+  }
+
+  /**
+   * New floors are listed in the order they are created - the floors of the
+   * selected suggestions are created up front, in the order of the ETS building
+   * structure, instead of the order their first entity is created in.
+   * Their level is left unset: the ETS has no notion of the ground floor.
+   */
+  private async _ensureFloorsInOrder(
+    suggestions: EntitySuggestion[],
+    projectAreas: ProjectAreas,
+    floorIds: Map<string, string>,
+  ) {
+    const floors = new Set<ProjectFloor>();
+    suggestions.forEach((suggestion) => {
+      const rowState = this._rowState(suggestion);
+      if (!rowState.selected || rowState.status === "created") return;
+      const area = suggestionArea(suggestion, rowState.platform, projectAreas);
+      // an existing area is kept on its floor - its floor of the ETS isn't needed
+      if (area?.floor && !findRegistryIdByName(this.hass.areas, area.name)) {
+        floors.add(area.floor);
+      }
+    });
+    for (const floor of [...floors].sort((a, b) => a.order - b.order)) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await this._ensureFloor(floor, floorIds);
+      } catch (err) {
+        // retried with the first area on this floor - which reports the error
+        logger.error("Error creating floor", err);
+      }
+    }
   }
 
   /** Back to where the suggestions were opened from, leaving no history entry. */

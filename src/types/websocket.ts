@@ -198,6 +198,8 @@ export interface KNXProject {
   // optional: not provided by projects stored with old xknxproject versions
   topology?: Record<string, KNXTopologyArea>; // keyed by area address
   locations?: Record<string, KNXSpace>; // keyed by space name
+  // optional: not provided by projects stored with old xknxproject versions
+  functions?: Record<string, KNXFunction>; // keyed by function identifier
 }
 
 export interface KNXTopologyArea {
@@ -225,6 +227,24 @@ export interface KNXSpace {
   devices: string[]; // individual addresses
   spaces: Record<string, KNXSpace>;
   functions: string[];
+}
+
+export interface KNXFunctionGroupAddressRef {
+  address: string;
+  name: string;
+  project_uid: number | null;
+  role: string;
+}
+
+/** A function of a space in the ETS building structure, eg. a switchable light. */
+export interface KNXFunction {
+  function_type: string;
+  group_addresses: Record<string, KNXFunctionGroupAddressRef>;
+  identifier: string;
+  name: string;
+  project_uid: number | null;
+  space_id: string;
+  usage_text: string;
 }
 
 export interface GroupRange {

@@ -132,19 +132,49 @@ describe("KNXEntitiesSuggestions", () => {
     const PROJECT = {
       locations: {
         b: space("b", "Building", "Building", {
+          cellar: space("cellar", "Floor", "Basement", {
+            storage: space("storage", "Room", "Storage"),
+          }),
           gf: space("gf", "Floor", "Ground floor", {
-            kitchen: space("kitchen", "Room", "Kitchen", {}, ["1.1.1"] as never[]),
+            kitchen: space(
+              "kitchen",
+              "Room",
+              "Kitchen",
+              { board: space("board", "DistributionBoard", "Board", {}, ["1.1.2"] as never[]) },
+              ["1.1.1"] as never[],
+            ),
             bath: space("bath", "Room", "Bath"),
+          }),
+          ff: space("ff", "Floor", "First floor", {
+            office: space("office", "Room", "Office"),
           }),
         }),
       },
+      functions: {
+        bathLight: {
+          space_id: "bath",
+          group_addresses: { ref: { address: "1/1/1" } },
+        },
+      },
     } as unknown as KNXProject;
+    // an actuator in the distribution board of the kitchen, switching the light of the bath
+    const boardSuggestion = suggestion("fb_2", "fb", "1.1.2", "Actuator");
+    boardSuggestion.suggestions = {
+      switch: {
+        knx: { ga_switch: { write: "1/1/1" } },
+        matched_group_addresses: [],
+        unmatched: [],
+      },
+    };
     const AREA_RESULT: EntitySuggestionsResult = {
       suggestions: [
         suggestion("fn_1", "fn", "kitchen", "Kitchen"),
         suggestion("fn_2", "fn", "bath", "Bath"),
-        suggestion("fb_1", "fb", "1.1.1", "Actuator"),
-        suggestion("fb_2", "fb", "1.1.2", "Sensor"),
+        suggestion("fb_1", "fb", "1.1.1", "Sensor"),
+        boardSuggestion,
+        suggestion("fb_3", "fb", "1.1.2", "Actuator"),
+        suggestion("fn_3", "fn", "office", "Office"),
+        suggestion("fn_4", "fn", "storage", "Storage"),
       ],
       providers: { fn: { state: "ok" }, fb: { state: "ok" } },
     };
@@ -160,7 +190,7 @@ describe("KNXEntitiesSuggestions", () => {
             counter += 1;
             return { success: true, entity_id: `switch.entity_${counter}` };
           case "config/floor_registry/create":
-            return { floor_id: `floor_${counter}` };
+            return { floor_id: `floor_${String(msg.name).toLowerCase().replace(" ", "_")}` };
           case "config/area_registry/create":
             if (failAreas) throw new Error("nope");
             return { area_id: `area_${String(msg.name).toLowerCase()}` };
@@ -185,29 +215,39 @@ describe("KNXEntitiesSuggestions", () => {
       const { view, host, calls } = setup();
       expect(host.querySelector(".assign-areas")).not.toBeNull();
       await view["_createSelected"]();
-      expect(calls("knx/create_entity")).toHaveLength(4);
+      expect(calls("knx/create_entity")).toHaveLength(7);
       expect(calls("config/entity_registry/update")).toHaveLength(0);
       expect(calls("config/area_registry/create")).toHaveLength(0);
     });
 
     it("creates floors and areas once and assigns entities to them", async () => {
-      const { view, calls } = setup({ existing_bath: { name: "bath" } });
+      const { view, calls } = setup({
+        existing_bath: { name: "bath" },
+        // its floor of the ETS is not created - it keeps its own
+        existing_office: { name: "OFFICE" },
+      });
       view["_assignAreas"] = true;
       await view["_createSelected"]();
-      // one floor and one area for the kitchen - the bath already exists
-      expect(calls("config/floor_registry/create")).toEqual([
-        { type: "config/floor_registry/create", name: "Ground floor" },
+      // floors up front in the order of the ETS - not in the order of the entities
+      expect(calls("config/floor_registry/create").map((msg) => msg.name)).toEqual([
+        "Basement",
+        "Ground floor",
       ]);
       expect(calls("config/area_registry/create")).toEqual([
-        { type: "config/area_registry/create", name: "Kitchen", floor_id: "floor_1" },
+        { type: "config/area_registry/create", name: "Kitchen", floor_id: "floor_ground_floor" },
+        { type: "config/area_registry/create", name: "Storage", floor_id: "floor_basement" },
       ]);
-      // the device 1.1.2 isn't placed in a room
+      // the actuator in the board takes the room of the function of its group address,
+      // the one without is in no room
       expect(
         calls("config/entity_registry/update").map((msg) => [msg.entity_id, msg.area_id]),
       ).toEqual([
         ["switch.entity_1", "area_kitchen"],
         ["switch.entity_2", "existing_bath"],
         ["switch.entity_3", "area_kitchen"],
+        ["switch.entity_4", "existing_bath"],
+        ["switch.entity_6", "existing_office"],
+        ["switch.entity_7", "area_storage"],
       ]);
     });
 
@@ -215,7 +255,7 @@ describe("KNXEntitiesSuggestions", () => {
       const { view, calls } = setup({}, true);
       view["_assignAreas"] = true;
       await view["_createSelected"]();
-      expect(calls("knx/create_entity")).toHaveLength(4);
+      expect(calls("knx/create_entity")).toHaveLength(7);
       const rowState = view["_rowState"](AREA_RESULT.suggestions[0]);
       expect(rowState.status).toBe("created");
       expect(rowState.areaErrorMessage).toBe("suggestions_area_error");
