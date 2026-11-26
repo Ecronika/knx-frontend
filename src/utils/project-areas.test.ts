@@ -68,6 +68,8 @@ const suggestion = (
  * └─ 1. First floor (Floor)
  *    └─ Corridor (Corridor)
  * Garden (Room - not on a floor)
+ * Outside (BuildingPart - with functions)
+ * └─ Terrace (Room)
  */
 const locations: Record<string, KNXSpace> = {
   building: space("building", {
@@ -108,12 +110,19 @@ const locations: Record<string, KNXSpace> = {
     },
   }),
   garden: space("garden", { name: "Garden" }),
+  outside: space("outside", {
+    type: "BuildingPart",
+    name: "Outside",
+    devices: ["1.1.6"],
+    spaces: { terrace: space("terrace", { name: "Terrace", devices: ["1.1.7"] }) },
+  }),
 };
 
 const functions: Record<string, KNXFunction> = {
   kitchenLight: func("kitchenLight", "kitchen", ["1/0/1", "1/0/2", "0/0/1"]),
   gardenLight: func("gardenLight", "garden", ["1/0/3", "0/0/1"]),
-  buildingCentral: func("buildingCentral", "building", ["1/0/4"]),
+  buildingCentral: func("buildingCentral", "building", ["1/0/4", "1/0/2"]),
+  carport: func("carport", "outside", ["1/0/5"]),
 };
 
 describe("getProjectAreas", () => {
@@ -137,9 +146,15 @@ describe("getProjectAreas", () => {
   });
 
   it("gives no area to spaces not within a room", () => {
-    expect(areaBySpace.building).toBeUndefined();
     expect(areaBySpace.gf).toBeUndefined();
     expect(areaBySpace.board).toBeUndefined();
+  });
+
+  it("makes spaces outside of a room holding functions an area without a floor", () => {
+    expect(areaBySpace.outside).toEqual({ name: "Outside", floor: null });
+    expect(areaBySpace.building).toEqual({ name: "Building", floor: null });
+    // the rooms within keep their own area
+    expect(areaBySpace.terrace).toEqual({ name: "Terrace", floor: null });
   });
 
   it("makes the names of areas unique", () => {
@@ -168,14 +183,17 @@ describe("getProjectAreas", () => {
       "1.1.1": areaBySpace.kitchen,
       "1.1.2": areaBySpace.kitchen,
       "1.1.4": areaBySpace.technical,
+      "1.1.7": areaBySpace.terrace,
+      // not 1.1.6 - placed in a building part with functions, which is no room
     });
   });
 
   it("lists the areas of the functions using a group address", () => {
     expect(areasByGroupAddress["1/0/1"]).toEqual([areaBySpace.kitchen]);
     expect(areasByGroupAddress["0/0/1"]).toEqual([areaBySpace.kitchen, areaBySpace.garden]);
-    // a function of the building has no area
-    expect(areasByGroupAddress["1/0/4"]).toBeUndefined();
+    expect(areasByGroupAddress["1/0/4"]).toEqual([areaBySpace.building]);
+    expect(areasByGroupAddress["1/0/2"]).toEqual([areaBySpace.kitchen, areaBySpace.building]);
+    expect(areasByGroupAddress["1/0/5"]).toEqual([areaBySpace.outside]);
   });
 
   it("removes sort numbers if asked to", () => {
@@ -194,6 +212,7 @@ describe("getProjectAreas", () => {
       areaBySpace: {},
       areaByDevice: {},
       areasByGroupAddress: {},
+      outsideRoomAreas: new Set(),
     });
   });
 });
@@ -204,6 +223,7 @@ describe("suggestionArea", () => {
 
   it("uses the space of a building function", () => {
     expect(area(suggestion("fn", "kitchen"))).toBe("05. Kitchen");
+    expect(area(suggestion("fn", "outside"))).toBe("Outside");
     expect(area(suggestion("fn", "unknown"))).toBeUndefined();
   });
 
@@ -225,6 +245,18 @@ describe("suggestionArea", () => {
     expect(area(suggestion("cfg", "1.1.3", knx))).toBe("05. Kitchen");
   });
 
+  it("prefers a room over a space outside of a room for a group address", () => {
+    // 1/0/2 is used by the kitchen and a central function of the building
+    expect(area(suggestion("cfg", "1.1.3", { ga_switch: { write: "1/0/2" } }))).toBe("05. Kitchen");
+    // the building only if no address is used by a room
+    expect(
+      area(suggestion("cfg", "1.1.3", { ga_a: { write: "1/0/4" }, ga_b: { state: "1/0/5" } })),
+    ).toBe("Building");
+    expect(
+      area(suggestion("cfg", "1.1.3", { ga_a: { write: "1/0/4" }, ga_b: { state: "1/0/1" } })),
+    ).toBe("05. Kitchen");
+  });
+
   it("ignores passive group addresses", () => {
     const knx = { ga_switch: { write: "9/9/9", passive: ["1/0/1"] } };
     expect(area(suggestion("cfg", "1.1.3", knx))).toBeUndefined();
@@ -239,6 +271,7 @@ describe("suggestionArea", () => {
     expect(area(suggestion("fb", "1.1.3"))).toBeUndefined();
     expect(area(suggestion("fb", "1.1.5"))).toBeUndefined();
     expect(area(suggestion("fb", "1.1.9"))).toBeUndefined();
+    expect(area(suggestion("fb", "1.1.6"))).toBeUndefined();
     expect(area(suggestion("fb", "1.1.99"))).toBeUndefined();
   });
 });

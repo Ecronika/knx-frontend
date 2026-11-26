@@ -11,6 +11,9 @@ const FLOOR_SPACE_TYPES = new Set(["Floor"]);
 // ETS space types becoming a Home Assistant area - spaces of other types (eg.
 // a segment of a room) take the area of a space containing them
 const AREA_SPACE_TYPES = new Set(["Room", "Corridor", "Stairway"]);
+// ETS space types becoming a Home Assistant area without a floor if functions are
+// placed directly in them - like a building part "Outside" with a carport and a garden
+const FUNCTION_AREA_SPACE_TYPES = new Set(["Building", "BuildingPart", "Floor"]);
 // devices placed in a distribution board - even one within a room - are actuators
 // or system devices: the room of the board says nothing about what they control
 const DISTRIBUTION_BOARD_SPACE_TYPES = new Set(["DistributionBoard"]);
@@ -31,12 +34,15 @@ export interface ProjectArea {
 }
 
 export interface ProjectAreas {
-  // key: space identifier - every space within an area-like space, the area itself included
+  // key: space identifier - every space within an area-like space, the area itself included,
+  // and spaces outside of a room holding functions directly
   areaBySpace: Record<string, ProjectArea>;
   // key: individual address - devices placed in a room, not in a distribution board
   areaByDevice: Record<string, ProjectArea>;
   // key: group address - the areas of the ETS functions using it
   areasByGroupAddress: Record<string, ProjectArea[]>;
+  // areas of spaces outside of a room holding functions - a room is preferred over them
+  outsideRoomAreas: ReadonlySet<ProjectArea>;
 }
 
 export interface ProjectAreaOptions {
@@ -54,9 +60,13 @@ export const getProjectAreas = (
   const areaBySpace: Record<string, ProjectArea> = {};
   const areaByDevice: Record<string, ProjectArea> = {};
   const areaSpaces: ProjectArea[] = [];
+  const outsideRoomAreas = new Set<ProjectArea>();
   const spaceName = (space: KNXSpace) =>
     options.stripSortNumbers ? stripSortNumber(space.name) : space.name;
   let floorCount = 0;
+  const functionSpaceIds = new Set(
+    Object.values(project.functions ?? {}).map((func) => func.space_id),
+  );
 
   const walk = (
     spaces: Record<string, KNXSpace>,
@@ -77,6 +87,15 @@ export const getProjectAreas = (
         inDistributionBoard || DISTRIBUTION_BOARD_SPACE_TYPES.has(space.type);
       if (spaceArea) {
         areaBySpace[space.identifier] = spaceArea;
+      } else if (
+        FUNCTION_AREA_SPACE_TYPES.has(space.type) &&
+        (space.functions.length || functionSpaceIds.has(space.identifier))
+      ) {
+        // only for the functions placed here - not for the rooms within or devices placed here
+        const functionArea = { name: spaceName(space), floor: null };
+        areaBySpace[space.identifier] = functionArea;
+        areaSpaces.push(functionArea);
+        outsideRoomAreas.add(functionArea);
       }
       space.devices.forEach((ia) => {
         // innermost space listing the device wins
@@ -102,7 +121,7 @@ export const getProjectAreas = (
     });
   });
 
-  return { areaBySpace, areaByDevice, areasByGroupAddress };
+  return { areaBySpace, areaByDevice, areasByGroupAddress, outsideRoomAreas };
 };
 
 /**
@@ -150,7 +169,8 @@ const groupAddressesOfConfig = (config: unknown): string[] => {
  * `fn` suggestions are grouped by the space of their function. Others are grouped
  * by the individual address of their device - an actuator in a distribution board
  * mostly - so the room of an ETS function using its group addresses is preferred:
- * the first write or state address used by functions of a single area decides.
+ * the first write or state address used by functions of a single room decides - or
+ * else of a single space outside of a room, eg. a central function of the building.
  * Only then the room the device is placed in is used.
  */
 export const suggestionArea = (
@@ -162,9 +182,13 @@ export const suggestionArea = (
     return projectAreas.areaBySpace[suggestion.group_id];
   }
   const addresses = groupAddressesOfConfig(suggestion.suggestions[platform]?.knx);
-  for (const address of addresses) {
-    const areas = projectAreas.areasByGroupAddress[address];
-    if (areas?.length === 1) return areas[0];
+  for (const outsideRoom of [false, true]) {
+    for (const address of addresses) {
+      const areas = (projectAreas.areasByGroupAddress[address] ?? []).filter(
+        (area) => projectAreas.outsideRoomAreas.has(area) === outsideRoom,
+      );
+      if (areas.length === 1) return areas[0];
+    }
   }
   return projectAreas.areaByDevice[suggestion.group_id];
 };
