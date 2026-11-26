@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render } from "lit";
 import type { HomeAssistant } from "@ha/types";
 import type { KnxStickyExpansionPanel } from "../components/knx-sticky-expansion-panel";
 import type { KNX } from "../types/knx";
-import type { EntitySuggestion, EntitySuggestionsResult } from "../types/websocket";
+import type { EntitySuggestion, EntitySuggestionsResult, KNXProject } from "../types/websocket";
 import { KNXEntitiesSuggestions } from "./entities_suggestions";
 
 const suggestion = (
@@ -113,5 +113,112 @@ describe("KNXEntitiesSuggestions", () => {
     // same group id, other provider
     expect(selected("cfg_1")).toBe(true);
     expect(selected("cfg_2")).toBe(true);
+  });
+
+  describe("area assignment", () => {
+    const space = (identifier: string, type: string, name: string, spaces = {}, devices = []) => ({
+      type,
+      identifier,
+      name,
+      usage_id: null,
+      usage_text: "",
+      number: "",
+      description: "",
+      project_uid: null,
+      devices,
+      spaces,
+      functions: [],
+    });
+    const PROJECT = {
+      locations: {
+        b: space("b", "Building", "Building", {
+          gf: space("gf", "Floor", "Ground floor", {
+            kitchen: space("kitchen", "Room", "Kitchen", {}, ["1.1.1"] as never[]),
+            bath: space("bath", "Room", "Bath"),
+          }),
+        }),
+      },
+    } as unknown as KNXProject;
+    const AREA_RESULT: EntitySuggestionsResult = {
+      suggestions: [
+        suggestion("fn_1", "fn", "kitchen", "Kitchen"),
+        suggestion("fn_2", "fn", "bath", "Bath"),
+        suggestion("fb_1", "fb", "1.1.1", "Actuator"),
+        suggestion("fb_2", "fb", "1.1.2", "Sensor"),
+      ],
+      providers: { fn: { state: "ok" }, fb: { state: "ok" } },
+    };
+
+    const setup = (existingAreas: Record<string, { name: string }> = {}, failAreas = false) => {
+      const { view, host, update } = draw(AREA_RESULT);
+      let counter = 0;
+      const callWS = vi.fn(async (msg: Record<string, unknown>) => {
+        switch (msg.type) {
+          case "knx/validate_entity":
+            return { success: true };
+          case "knx/create_entity":
+            counter += 1;
+            return { success: true, entity_id: `switch.entity_${counter}` };
+          case "config/floor_registry/create":
+            return { floor_id: `floor_${counter}` };
+          case "config/area_registry/create":
+            if (failAreas) throw new Error("nope");
+            return { area_id: `area_${String(msg.name).toLowerCase()}` };
+          default:
+            return {};
+        }
+      });
+      view.hass = {
+        ...view.hass,
+        callWS,
+        areas: existingAreas,
+        floors: {},
+      } as unknown as HomeAssistant;
+      view["_projectData"] = PROJECT;
+      update();
+      const calls = (type: string) =>
+        callWS.mock.calls.map(([msg]) => msg).filter((msg) => msg.type === type);
+      return { view, host, update, calls };
+    };
+
+    it("leaves areas alone unless enabled", async () => {
+      const { view, host, calls } = setup();
+      expect(host.querySelector(".assign-areas")).not.toBeNull();
+      await view["_createSelected"]();
+      expect(calls("knx/create_entity")).toHaveLength(4);
+      expect(calls("config/entity_registry/update")).toHaveLength(0);
+      expect(calls("config/area_registry/create")).toHaveLength(0);
+    });
+
+    it("creates floors and areas once and assigns entities to them", async () => {
+      const { view, calls } = setup({ existing_bath: { name: "bath" } });
+      view["_assignAreas"] = true;
+      await view["_createSelected"]();
+      // one floor and one area for the kitchen - the bath already exists
+      expect(calls("config/floor_registry/create")).toEqual([
+        { type: "config/floor_registry/create", name: "Ground floor" },
+      ]);
+      expect(calls("config/area_registry/create")).toEqual([
+        { type: "config/area_registry/create", name: "Kitchen", floor_id: "floor_1" },
+      ]);
+      // the device 1.1.2 isn't placed in a room
+      expect(
+        calls("config/entity_registry/update").map((msg) => [msg.entity_id, msg.area_id]),
+      ).toEqual([
+        ["switch.entity_1", "area_kitchen"],
+        ["switch.entity_2", "existing_bath"],
+        ["switch.entity_3", "area_kitchen"],
+      ]);
+    });
+
+    it("keeps the entity created if its area can't be assigned", async () => {
+      const { view, calls } = setup({}, true);
+      view["_assignAreas"] = true;
+      await view["_createSelected"]();
+      expect(calls("knx/create_entity")).toHaveLength(4);
+      const rowState = view["_rowState"](AREA_RESULT.suggestions[0]);
+      expect(rowState.status).toBe("created");
+      expect(rowState.areaErrorMessage).toBe("suggestions_area_error");
+    });
   });
 });
